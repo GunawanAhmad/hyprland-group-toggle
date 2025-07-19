@@ -6,3 +6,6 @@ build: main.go
 
 install: build
 	sudo install -Dm755 bin/$(BINARY_NAME) $(DESTDIR)/$(BINARY_NAME)
+
+run: main.go
+	go run main.go
