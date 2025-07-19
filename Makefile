@@ -1,4 +1,4 @@
-BINARY_NAME=hyprland-group-toggle
+BINARY_NAME=hyprtabs
 DESTDIR=/usr/local/bin
 
 build: main.go

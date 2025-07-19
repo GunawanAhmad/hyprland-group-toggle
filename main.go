@@ -16,6 +16,24 @@ type Window struct {
 	Workspace Workspace `json:"workspace"`
 }
 
+func sendCommand(command string, socketPath string) ([]byte, int, error) {
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer conn.Close()
+	_, err = conn.Write([]byte(command))
+	if err != nil {
+		return nil, 0, err
+	}
+	buffer := make([]byte, 10000000)
+	n, err := conn.Read(buffer)
+	if err != nil {
+		return nil, 0, err
+	}
+	return buffer, n, nil
+}
+
 func main() {
 	// Step to change current workspace to group in hyprland
 	// 1. Create socket connection to hyprland IPC
@@ -33,27 +51,9 @@ func main() {
 		panic("XDG_RUNTIME_DIR or HYPRLAND_INSTANCE_SIGNATURE is not set, are you using Hyprland?")
 	}
 	socketPath := runtimeDir + "/hypr/" + instanceSig + "/.socket.sock"
-
-	conn, err := net.Dial("unix", socketPath)
-
+	buffer, n, err := sendCommand("j/activeworkspace", socketPath)
 	if err != nil {
-		panic("failed to connect to Hyprland IPC socket: " + err.Error())
-	}
-	// errcheck: ignore error on close, as we are just cleaning up
-	// defer conn.Close()
-
-	// Step 2: Get current workspace
-	// Prepare the command to get the active workspace
-	command := "j/activeworkspace"
-	_, err = conn.Write([]byte(command))
-	if err != nil {
-		panic("failed to send command to Hyprland IPC: " + err.Error())
-	}
-	// Read the response from the socket
-	buffer := make([]byte, 4096)
-	n, err := conn.Read(buffer)
-	if err != nil {
-		panic("failed to read resonse from Hyprland IPC: " + err.Error())
+		panic("failed to connect to Hyprland IPC: " + err.Error())
 	}
 	var workspace Workspace
 	err = json.Unmarshal(buffer[:n], &workspace)
@@ -63,20 +63,9 @@ func main() {
 
 	// Step 3: Get all windows in current workspace
 	// Prepare the command to get all windows in the current workspace
-	conn, err = net.Dial("unix", socketPath)
+	buffer, n, err = sendCommand("j/clients", socketPath)
 	if err != nil {
-		panic("failed to connect to Hyprland IPC socket: " + err.Error())
-	}
-	command = "j/clients"
-	_, err = conn.Write([]byte(command))
-	if err != nil {
-		panic("failed to send command to Hyprland IPC: " + err.Error())
-	}
-	// Read the response from the socket
-	buffer = make([]byte, 4096)
-	n, err = conn.Read(buffer)
-	if err != nil {
-		panic("failed to read response from Hyprland IPC: " + err.Error())
+		panic("failed to get windows: " + err.Error())
 	}
 	var windows []Window
 	err = json.Unmarshal(buffer[:n], &windows)
@@ -90,16 +79,20 @@ func main() {
 		}
 	}
 
-	// Step 4: Set current active window into a group
-	command = "dispatch togglegroup"
-	conn, err = net.Dial("unix", socketPath)
+	_, _, err = sendCommand("dispatch togglegroup", socketPath)
 	if err != nil {
-		panic("failed to connect to Hyprland IPC socket: " + err.Error())
+		panic("failed to toggle group: " + err.Error())
 	}
-	_, err = conn.Write([]byte(command))
 
+	// TODO: Step 4: Set current active window into a group
+	buffer, n, err = sendCommand("j/activewindow", socketPath)
 	if err != nil {
-		panic("failed to send command to Hyprland IPC: " + err.Error())
+		panic("failed to get active window: " + err.Error())
+	}
+	var activeWindow Window
+	err = json.Unmarshal(buffer[:n], &activeWindow)
+	if err != nil {
+		panic("failed to marshal response to JSON: " + err.Error())
 	}
 
 	// TODO: Step 5: Check if current active window is in group
@@ -108,56 +101,36 @@ func main() {
 
 	// move all windows to the group workspace
 	for _, window := range windowInWorkspace {
-		// focus the window
-		command = "dispatch focuswindow address:" + window.Address
-		conn, err = net.Dial("unix", socketPath)
-		if err != nil {
-			panic("failed to connect to Hyprland IPC socket: " + err.Error())
+		if window.Address == activeWindow.Address {
+			continue // skip the active window, it is already in the group
 		}
-		_, err = conn.Write([]byte(command))
+		// focus the window
+		_, _, err = sendCommand("dispatch focuswindow address:"+window.Address, socketPath)
 		if err != nil {
-			panic("failed to send command to Hyprland IPC: " + err.Error())
+			panic("failed to focus window: " + err.Error())
 		}
 		// move the window to the group window
-		command = "dispatch moveintogroup l"
-		conn, err = net.Dial("unix", socketPath)
+		_, _, err = sendCommand("dispatch moveintogroup l", socketPath)
 		if err != nil {
-			panic("failed to connect to Hyprland IPC socket: " + err.Error())
+			panic("failed to move window into group: " + err.Error())
 		}
-		_, err = conn.Write([]byte(command))
+		_, _, err = sendCommand("dispatch moveintogroup r", socketPath)
 		if err != nil {
-			panic("failed to send command to Hyprland IPC: " + err.Error())
+			panic("failed to move window into group: " + err.Error())
 		}
-
-		command = "dispatch moveintogroup r"
-		conn, err = net.Dial("unix", socketPath)
+		_, _, err = sendCommand("dispatch moveintogroup u", socketPath)
 		if err != nil {
-			panic("failed to connect to Hyprland IPC socket: " + err.Error())
+			panic("failed to move window into group: " + err.Error())
 		}
-		_, err = conn.Write([]byte(command))
+		_, _, err = sendCommand("dispatch moveintogroup b", socketPath)
 		if err != nil {
-			panic("failed to send command to Hyprland IPC: " + err.Error())
-		}
-		
-		command = "dispatch moveintogroup u"
-		conn, err = net.Dial("unix", socketPath)
-		if err != nil {
-			panic("failed to connect to Hyprland IPC socket: " + err.Error())
-		}
-		_, err = conn.Write([]byte(command))
-		if err != nil {
-			panic("failed to send command to Hyprland IPC: " + err.Error())
+			panic("failed to move window into group: " + err.Error())
 		}
 
-		command = "dispatch moveintogroup b"
-		conn, err = net.Dial("unix", socketPath)
+		// set active as last current active window
+		_, _, err = sendCommand("dispatch focuswindow address:"+activeWindow.Address, socketPath)
 		if err != nil {
-			panic("failed to connect to Hyprland IPC socket: " + err.Error())
-		}
-		_, err = conn.Write([]byte(command))
-		if err != nil {
-			panic("failed to send command to Hyprland IPC: " + err.Error())
+			panic("failed to focus window: " + err.Error())
 		}
 	}
-
 }
