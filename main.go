@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"log"
 	"net"
 	"os"
+	"strings"
 )
 
 type Workspace struct {
@@ -21,12 +23,16 @@ func sendCommand(command string, socketPath string) ([]byte, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	defer conn.Close()
+	defer func() {
+		if cerr := conn.Close(); cerr != nil {
+			log.Println("Error closing connection:", cerr)
+		}
+	}()
 	_, err = conn.Write([]byte(command))
 	if err != nil {
 		return nil, 0, err
 	}
-	buffer := make([]byte, 10000000)
+	buffer := make([]byte, 8192)
 	n, err := conn.Read(buffer)
 	if err != nil {
 		return nil, 0, err
@@ -35,16 +41,6 @@ func sendCommand(command string, socketPath string) ([]byte, int, error) {
 }
 
 func main() {
-	// Step to change current workspace to group in hyprland
-	// 1. Create socket connection to hyprland IPC
-	// 2. Get current workspace
-	// 3. Get all window in current workspace
-	// 4. Set current active window into a group
-	// 5. check if current active window is in group
-	// 6. If not, change current workspace to group workspace and move all window to active group
-	// 7. If yes, remove the group
-
-	// Step 1: create socket connection to hyprland IPC
 	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
 	instanceSig := os.Getenv("HYPRLAND_INSTANCE_SIGNATURE")
 	if runtimeDir == "" || instanceSig == "" {
@@ -61,7 +57,6 @@ func main() {
 		panic("failed to marshal response to JSON: " + err.Error())
 	}
 
-	// Step 3: Get all windows in current workspace
 	// Prepare the command to get all windows in the current workspace
 	buffer, n, err = sendCommand("j/clients", socketPath)
 	if err != nil {
@@ -84,7 +79,10 @@ func main() {
 		panic("failed to toggle group: " + err.Error())
 	}
 
-	// TODO: Step 4: Set current active window into a group
+	if len(windowInWorkspace) == 0 {
+		return
+	}
+
 	buffer, n, err = sendCommand("j/activewindow", socketPath)
 	if err != nil {
 		panic("failed to get active window: " + err.Error())
@@ -94,43 +92,33 @@ func main() {
 	if err != nil {
 		panic("failed to marshal response to JSON: " + err.Error())
 	}
-
-	// TODO: Step 5: Check if current active window is in group
-
-	// TODO: Step 6: If not, change current workspace to group workspace and move all window to active group
-
-	// move all windows to the group workspace
+	
+	// BUG: Sometime there's a window that somehow not moved to the group. So it't very consistent to move all windows in the workspace to the group.
+	var commands []string
 	for _, window := range windowInWorkspace {
+		// skip the active window
 		if window.Address == activeWindow.Address {
-			continue // skip the active window, it is already in the group
+			continue
 		}
-		// focus the window
-		_, _, err = sendCommand("dispatch focuswindow address:"+window.Address, socketPath)
-		if err != nil {
-			panic("failed to focus window: " + err.Error())
+		for range 3 {
+			commands = append(commands,
+				"dispatch focuswindow address:"+window.Address,
+				"dispatch moveintogroup l",
+				"dispatch moveintogroup r",
+				"dispatch moveintogroup u",
+				"dispatch moveintogroup d",
+			)
 		}
-		// move the window to the group window
-		_, _, err = sendCommand("dispatch moveintogroup l", socketPath)
-		if err != nil {
-			panic("failed to move window into group: " + err.Error())
-		}
-		_, _, err = sendCommand("dispatch moveintogroup r", socketPath)
-		if err != nil {
-			panic("failed to move window into group: " + err.Error())
-		}
-		_, _, err = sendCommand("dispatch moveintogroup u", socketPath)
-		if err != nil {
-			panic("failed to move window into group: " + err.Error())
-		}
-		_, _, err = sendCommand("dispatch moveintogroup b", socketPath)
-		if err != nil {
-			panic("failed to move window into group: " + err.Error())
-		}
+	}
 
-		// set active as last current active window
-		_, _, err = sendCommand("dispatch focuswindow address:"+activeWindow.Address, socketPath)
-		if err != nil {
-			panic("failed to focus window: " + err.Error())
-		}
+	// focus the active window last
+	commands = append(commands, "dispatch focuswindow address:"+activeWindow.Address)
+
+	dispatchBatch := "[[BATCH]]" + strings.Join(commands, ";")
+	
+	// TODO: Split the command into smaller chunks if it exceeds the maximum length
+	_, _, err = sendCommand(dispatchBatch, socketPath)
+	if err != nil {
+		panic("failed to move windows to group: " + err.Error())
 	}
 }
